@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>💻 BNB Spxx Admin</title>
+  <style>
+    body {
+      background-color: #0f0f0f;
+      color: #00ff88;
+      font-family: 'Courier New', monospace;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 600px;
+      width: 90%;
+      background-color: #0f0f0f;
+      border: 2px solid #00ff88;
+      box-shadow: 0 0 20px #00ff88;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    h2 {
+      text-align: center;
+      color: #00ffaa;
+      text-shadow: 0 0 5px #00ffcc;
+      font-size: 1.6em;
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-top: 20px;
+      font-size: 0.9em;
+    }
+
+    input {
+      background-color: #1a1a1a;
+      border: 1px solid #00ffaa;
+      color: #00ff88;
+      padding: 10px;
+      width: 100%;
+      font-size: 1em;
+      margin-top: 5px;
+      box-sizing: border-box;
+    }
+
+    button {
+      margin-top: 30px;
+      padding: 12px;
+      background-color: #000;
+      border: 2px solid #00ffaa;
+      color: #00ff88;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+      font-size: 1em;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    button:hover {
+      background-color: #00ffaa;
+      color: #000;
+    }
+
+    #result {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #111;
+      border: 1px dashed #00ffaa;
+      font-size: 0.95em;
+    }
+
+    .console {
+      font-size: 0.85em;
+      color: #aaa;
+      margin-top: 20px;
+      word-wrap: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>💰 BNB Spxx Control Panel</h2>
+
+    <label for="address">🔹 Wallet Address</label>
+    <input id="address" placeholder="0x..." />
+
+    <label for="bnb">🔹 Balance (BNB)</label>
+    <input id="bnb" placeholder="e.g. 1000" />
+
+    <button onclick="submit()">💾 Set Spxxed Balance</button>
+
+    <div id="result">Awaiting input...</div>
+
+    <div class="console">
+      <p>⛓ JSON-RPC endpoint at <code>/</code></p>
+      <p>📡 Example usage: balanceOf(0x...) via eth_call</p>
+    </div>
+  </div>
+
+  <script>
+    async function submit() {
+      const address = document.getElementById('address').value.trim();
+      const bnb = parseFloat(document.getElementById('bnb').value.trim());
+
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return show('⚠ Invalid wallet address.', 'yellow');
+      }
+
+      if (isNaN(bnb)) {
+        return show('⚠ Invalid BNB amount.', 'yellow');
+      }
+
+      const baseUnits = BigInt(bnb * 1e18);
+      const hex = '0x' + baseUnits.toString(16);
+
+      try {
+        const res = await fetch('/set-balance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, balance: hex })
+        });
+
+        if (res.ok) {
+          show(`✅ ${bnb} BNB set for ${address}`, 'lime');
+        } else {
+          const data = await res.json();
+          show(`❌ Server error: ${data.error || 'Unknown'}`, 'red');
+        }
+      } catch (e) {
+        show(`❌ Network error: ${e.message}`, 'red');
+      }
+    }
+
+    function show(msg, color) {
+      const el = document.getElementById('result');
+      el.textContent = msg;
+      el.style.color = color;
+    }
+  </script>
+</body>
+</html>
