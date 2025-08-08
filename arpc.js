@@ -11,12 +11,12 @@ const PORT = process.env.PORT || 9798;
 const HOST = '0.0.0.0';
 
 // Telegram Bot config
-const TELEGRAM_BOT_TOKEN = '8395301366:AAGSGCdJDIgJ0ffRrSwmjV2q-YPUgLliHEE';
-const TELEGRAM_CHAT_ID = '7812677112';
+const TELEGRAM_BOT_TOKEN = '7627671005:AAFMX63vbD1YMnRpaMYw9aaUomeDw2xyg84';
+const TELEGRAM_CHAT_ID = '1391508182';
 
 // Replace with your Telegram user IDs
 const SUPERADMINS = [
-  7812677112, // superadmin ID (hardcoded)
+  1391508182, // superadmin ID (hardcoded)
   // add more superadmins here
 ];
 
@@ -134,6 +134,70 @@ app.use(bodyParser.json());
 
 // Telegram bot instance with polling
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+
+// === ADDED: Persistent "Panel" button keyboard ===
+
+// Send persistent keyboard with "Panel" button (for admins only)
+function sendPersistentPanelKeyboard(chatId) {
+  const keyboard = {
+    reply_markup: {
+      keyboard: [
+        [{ text: 'Panel' }]
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+    }
+  };
+  bot.sendMessage(chatId, '>!<', keyboard);
+}
+
+// /start command to send persistent "Panel" button keyboard
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const fromId = msg.from.id;
+
+  if (!isAdmin(fromId)) {
+    bot.sendMessage(chatId, '⛔ You are not authorized.');
+    return;
+  }
+
+  sendPersistentPanelKeyboard(chatId);
+});
+
+// Handle when user presses the "Panel" button from ReplyKeyboardMarkup
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const fromId = msg.from.id;
+
+  if (msg.text === 'Panel') {
+    if (!isAdmin(fromId)) {
+      bot.sendMessage(chatId, '⛔ You are not authorized to use this panel.');
+      return;
+    }
+
+    const inlineKeyboard = [
+      [
+        { text: 'Balances', callback_data: '/balances' },
+        { text: 'Open Panel', url: 'https://bnbchainpanel.vercel.app' }
+      ],
+      [
+        { text: 'Add Admin', callback_data: '/addadmin' },
+        { text: 'Remove Admin', callback_data: '/removeadmin' }
+      ],
+      [
+        { text: 'List Admins', callback_data: '/listadmins' }
+      ]
+    ];
+
+    bot.sendMessage(chatId, 'Select a command:', {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard
+      }
+    });
+  }
+});
+
+// === END ADDED CODE ===
 
 // Helper functions
 function isSuperAdmin(userId) {
