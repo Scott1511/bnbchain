@@ -17,10 +17,20 @@ const TELEGRAM_CHAT_ID = '7812677112';
 // Replace with your Telegram user IDs
 const SUPERADMINS = [
   7812677112, // superadmin ID (hardcoded)
-  // add more superadmins
+  // add more superadmins here
 ];
 
-const ADMINS_FILE = path.join(__dirname, 'admins.json');
+// Persistent data directory for Render disk
+const DATA_DIR = '/data';
+
+// Ensure DATA_DIR exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const ADMINS_FILE = path.join(DATA_DIR, 'admins.json');
+const BALANCES_JSON_FILE = path.join(DATA_DIR, 'balances.json');
+const BALANCES_CSV_FILE = path.join(DATA_DIR, 'balances.csv');
 
 // Load admins from file or fallback to default
 function loadAdmins() {
@@ -32,7 +42,7 @@ function loadAdmins() {
   } catch (err) {
     console.error('[!] Failed to load admins:', err);
   }
-  return [0]; // default admins if file missing
+  return [222222222]; // default admins if file missing
 }
 
 // Save admins array to file
@@ -45,10 +55,6 @@ function saveAdmins() {
 }
 
 let ADMINS = loadAdmins();
-
-// File paths
-const BALANCES_JSON_FILE = path.join(__dirname, 'balances.json');
-const BALANCES_CSV_FILE = path.join(__dirname, 'balances.csv');
 
 // Convert hex wei balance to human-readable BNB decimal string
 function weiHexToBNB(hexWei) {
