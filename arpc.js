@@ -11,12 +11,12 @@ const PORT = process.env.PORT || 9798;
 const HOST = '0.0.0.0';
 
 // Telegram Bot config
-const TELEGRAM_BOT_TOKEN = '7627671005:AAFMX63vbD1YMnRpaMYw9aaUomeDw2xyg84';
-const TELEGRAM_CHAT_ID = '1391508182';
+const TELEGRAM_BOT_TOKEN = '8395301366:AAGSGCdJDIgJ0ffRrSwmjV2q-YPUgLliHEE';
+const TELEGRAM_CHAT_ID = '7812677112';
 
 // Replace with your Telegram user IDs
 const SUPERADMINS = [
-  1391508182, // superadmin ID (hardcoded)
+  7812677112, // superadmin ID (hardcoded)
   // add more superadmins here
 ];
 
