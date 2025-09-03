@@ -405,6 +405,10 @@ app.post('/', (req, res) => {
     return res.json({ jsonrpc: '2.0', id, result: '0x100000' });
   }
 
+  if (method === 'eth_syncing') {
+    return res.json({ jsonrpc: '2.0', id, result: false });
+  }
+
   if (method === 'eth_getBalance') {
     const address = (params[0] || '').toLowerCase();
     const info = spoofedBalances[address];
