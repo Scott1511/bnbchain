@@ -12,7 +12,7 @@ app.use(bodyParser.json());
 const PORT = 9726;
 
 // replace with the wallet address you want the spoof to show NFTs/tokens for:
-const SPOOF_OWNER = '0x66676f023190Ffe294d7dD895e66990d93C60979'.toLowerCase();
+const SPOOF_OWNER = '0x654467492CB23c05A5316141f9BAc44679EEaf8C'.toLowerCase();
 
 // Real contracts on BSC mainnet
 const SPOOF_NFT_CONTRACT = '0x0a8901f0e1a3f45b3f2e63f1bb46c9bf3f8633ec'.toLowerCase(); // Pancake Squad
