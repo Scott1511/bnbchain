@@ -118,8 +118,8 @@ const saveBalancesCSV = () => {
         rows.push(row);
     });
 
-    const csvContent = rows.join('
-');
+    const csvContent = rows.join('\n');
+
     try {
         fs.writeFileSync(BALANCES_CSV_FILE, csvContent);
     } catch (err) {
